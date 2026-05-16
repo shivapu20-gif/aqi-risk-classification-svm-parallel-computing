@@ -1,0 +1,816 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+---
+
+# ================================#
+# CS5811 Distributed Data Analysis
+# Group work and individuals
+**CS5811 Distributed Data Analysis** 
+Classifying Urban Air Quality Risk from Pollutant Sub-Indices:
+**A Machine Learning and Parallel Computing Approach**
+author: "Ahmed Malik · Zayan Arshad Syed · Shiv Solanki"
+**"Brunel University London | Department of Computer Science | May 2026"**
+# ================================#
+
+
+```{r}
+#IMPORT APPROPRIATE LIBRARIES 
+library(tidyverse)
+library(readr)
+library(knitr)
+library(janitor)
+library(rsample)
+library(randomForest)
+```
+
+#IMPORTING THE DATASET
+```{r}
+# Import dataset
+aqi_raw <- read_csv("AQI and Lat Long of Countries.csv")
+head(aqi_raw)
+```
+
+
+#EXPLORING THE DATA AND GAINING INSIGHTS 
+```{r}
+# Basic inspection
+dim(aqi_raw)
+glimpse(aqi_raw)
+names(aqi_raw)
+summary(aqi_raw)
+head(aqi_raw)
+```
+This gives us a first understanding of:
+
+-how many rows and columns the dataset has
+-what the variable names are
+-which variables are numeric or categorical
+-whether there are missing values
+-whether any columns look irrelevant or messy
+-what the rough ranges of the variables look like
+
+This dataset contains 16,695 observations and 14 variables, representing air quality measurements across different countries and cities. The key variable of interest is AQI Value, which indicates overall air pollution levels. Alongside this, pollutant-specific indicators such as CO, Ozone, NO₂, and PM2.5 AQI values are provided, along with their respective categories. The dataset is cross-sectional, representing a snapshot of air quality conditions across cities at a given point in time. This means temporal patterns such as seasonal variation are not captured in this analysis.
+
+Geographical variables (latitude and longitude) are also included, allowing for potential spatial analysis.
+
+## RESEARCH QUESTION
+This study aims to investigate whether pollutant sub-indices can reliably classify urban air quality risk categories. It also evaluates which machine learning models and high-performance computing approaches provide the best balance between prediction accuracy, interpretability, and computational efficiency.
+
+## ANALYSIS PLAN
+The analysis follows a structured workflow: exploratory data analysis to understand the dataset, data cleaning and preparation, model development using multiple classification techniques, performance evaluation, and comparison of high-performance computing implementations.
+
+#RENAMIMG THE DATASET 
+```{r}
+aqi_data <- aqi_raw %>%
+  clean_names()
+```
+
+#VERIFYING DATA TYPES
+```{r}
+str(aqi_data)
+```
+Variable types were verified to ensure that numerical variables are correctly formatted for analysis and that categorical variables such as AQI category are appropriately represented.
+
+#EXPLORING THE AQI 
+```{r}
+ggplot(aqi_data, aes(x = aqi_value)) +
+  geom_histogram(bins = 40, fill = "red", color = "grey") +
+  labs(
+    title = "Distribution of AQI Values",
+    x = "AQI Value",
+    y = "Frequency"
+  ) +
+  theme_minimal()
+```
+The histogram shows how AQI values are distributed across observations. This is useful because it tells us whether air quality levels are mostly concentrated in lower-risk ranges or whether the dataset contains many severe pollution cases. If the distribution is strongly skewed, it suggests that extreme air quality events are less common but still important to capture.
+
+The distribution of AQI values shows a clear positive (right) skew, where the majority of observations are concentrated at lower AQI levels, while a small number of extreme values extend towards higher pollution levels. Most cities fall within the AQI range of approximately 30 to 80, indicating generally acceptable air quality conditions.
+
+However, the presence of extreme values (reaching up to 500) suggests that some locations experience severe pollution episodes, which significantly increase the spread of the data. This skewness indicates that the mean AQI (63) is higher than the median (52), confirming the influence of outliers.
+
+#EXPLORING THE AQI CATEGORIES 
+```{r}
+ggplot(aqi_data, aes(x = aqi_category)) +
+  geom_bar(fill = "red") +
+  labs(
+    title = "Distribution of AQI Categories",
+    x = "AQI Category",
+    y = "Count"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+```
+
+The categorical distribution of AQI levels reveals that the dataset is highly imbalanced, with the majority of observations falling into the “Good” and “Moderate” categories. In contrast, categories such as “Hazardous” and “Very Unhealthy” are extremely rare.
+
+This indicates that most recorded locations generally experience acceptable to moderate air quality, while severe pollution events are relatively uncommon.
+
+#CHECKING THE POLLUTANT VARIABLES 
+```{r}
+aqi_data %>%
+  select(co_aqi_value, ozone_aqi_value, no2_aqi_value, pm2_5_aqi_value) %>%
+  pivot_longer(everything(), names_to = "pollutant", values_to = "value") %>%
+  ggplot(aes(x = value)) +
+  geom_histogram(bins = 35, fill = "darkseagreen", color = "white") +
+  facet_wrap(~ pollutant, scales = "free") +
+  labs(
+    title = "Distribution of Pollutant Sub-Indices",
+    x = "Value",
+    y = "Frequency"
+  ) +
+  theme_minimal()
+```
+These histograms show how each pollutant sub-index is distributed. This helps identify which pollutants vary the most and which appear to contribute more strongly to poor air quality conditions. A wide spread or long tail may indicate that a pollutant plays an important role in extreme AQI cases.
+
+The distributions of pollutant sub-indices reveal distinct variability patterns across pollutants. CO AQI values are highly concentrated at very low levels, indicating minimal variation and suggesting that CO contributes little to no differences in overall air quality across observations. Similarly, NO₂ values are generally low, with a slight right skew, indicating occasional increases but limited overall influence.
+
+In contrast, Ozone exhibits moderate variability, with values spread across a wider range, suggesting a more noticeable but still secondary contribution. The most significant variation is observed in PM2.5 AQI values, which display a strong right-skewed distribution with extreme values extending up to 500.
+
+#CHECKING THE RELATIONSHIP WITH THE AQI
+```{r}
+ggplot(aqi_data, aes(x = pm2_5_aqi_value, y = aqi_value)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(
+    title = "PM2.5 AQI vs Overall AQI",
+    x = "PM2.5 AQI Value",
+    y = "Overall AQI"
+  ) +
+  theme_minimal()
+```
+This scatterplot is used to check whether PM2.5 is strongly associated with overall AQI. A clear upward pattern would suggest that PM2.5 is a major driver of air quality risk and should be retained as a key predictor in the later modelling stage.
+
+The relationship between PM2.5 AQI and overall AQI demonstrates a strong positive linear association, with points closely aligned along a straight line. This indicates that increases in PM2.5 levels are directly associated with increases in overall AQI.
+
+The correlation coefficient of approximately 0.98 confirms an extremely strong relationship, suggesting that PM2.5 alone explains a substantial proportion of the variation in overall air quality.
+
+#CHECKING FOR THE POTENTIAL OUTLIERS 
+```{r}
+ggplot(aqi_data, aes(y = aqi_value)) +
+  geom_boxplot(fill = "lightblue") +
+  labs(
+    title = "Boxplot of AQI Values",
+    y = "AQI Value"
+  ) +
+  theme_minimal()
+```
+The boxplot of AQI values highlights the presence of numerous extreme outliers, particularly at higher AQI levels. While the majority of observations are concentrated within a relatively narrow range (around 30–70), a significant number of observations extend far beyond this range.
+
+
+#IQR METHOD CHECK
+```{r}
+Q1 <- quantile(aqi_data$aqi_value, 0.25, na.rm = TRUE)
+Q3 <- quantile(aqi_data$aqi_value, 0.75, na.rm = TRUE)
+
+IQR_value <- Q3 - Q1
+
+upper_bound <- Q3 + 1.5 * IQR_value
+lower_bound <- Q1 - 1.5 * IQR_value
+
+outliers <- aqi_data %>%
+  filter(aqi_value > upper_bound | aqi_value < lower_bound)
+
+nrow(outliers)
+```
+Outliers were assessed using both visual (boxplot) and numerical (IQR) methods. A number of extreme AQI values were identified; however, these observations were retained. This is because high AQI values represent real-world severe pollution events rather than errors. Removing them would reduce the model’s ability to identify hazardous air quality conditions, which are critical for this analysis.Outlier analysis using the IQR method identified approximately 9.4% of the observations as extreme values. These outliers correspond to high AQI levels and represent genuine pollution events rather than data errors. As such, they are retained in the dataset to ensure that the analysis captures the full range of air quality conditions. However, their presence introduces potential challenges for modelling, particularly for methods sensitive to extreme values, which will be considered in the model selection process.
+
+
+#TO CHECK FOR THE OUTLIERS IN THE PM2.5 
+```{r}
+ggplot(aqi_data, aes(y = pm2_5_aqi_value)) +
+  geom_boxplot(fill = "lightgreen") +
+  labs(
+    title = "Boxplot of PM2.5 AQI",
+    y = "PM2.5 AQI Value"
+  ) +
+  theme_minimal()
+```
+The PM2.5 AQI boxplot mirrors the pattern observed in the overall AQI distribution, with a large number of extreme values and a long upper tail. This further reinforces the earlier observation that PM2.5 is the primary contributor to AQI variability.
+
+
+#CORRELATION MATRIX 
+```{r}
+cor_data <- aqi_data %>%
+  select(aqi_value, co_aqi_value, ozone_aqi_value, no2_aqi_value, pm2_5_aqi_value, lat, lng)
+
+cor_matrix <- cor(cor_data, use = "complete.obs")
+round(cor_matrix, 2)
+```
+The correlation analysis reveals that PM2.5 AQI has an extremely strong positive correlation (0.98) with overall AQI, confirming it as the dominant factor influencing air quality. Other pollutants such as CO (0.46), Ozone (0.33), and NO₂ (0.31) show moderate to weak relationships, indicating they contribute to AQI but to a lesser extent.
+
+Geographical variables (latitude and longitude) exhibit very weak correlations, suggesting that location alone does not strongly determine AQI levels in this dataset.
+
+#CHECKING FOR MISSING VALUES
+```{r}
+colSums(is.na(aqi_data))
+```
+The missing value analysis shows that most variables in the dataset are complete. However, the country variable contains 302 missing values. Since the country variable is not directly used as a predictor in the modelling stage, and geographic information is already captured through latitude and longitude, these missing values do not significantly affect the analysis. Therefore, no rows were removed, and the dataset was retained in its original form to preserve the full sample size.
+
+#CHECKING FOR DUPLICATES
+```{r}
+sum(duplicated(aqi_data))
+```
+No duplicate records were found in the dataset, indicating that each observation represents a unique measurement.
+
+
+*DATA CLEANING AND PREPARATION*
+#FINDING THE MISSING VALUES AND LOCATING THEM
+```{r}
+aqi_data %>%
+  summarise(across(everything(), ~ sum(is.na(.)))) %>%
+  pivot_longer(
+    everything(),
+    names_to = "variable",
+    values_to = "missing_count"
+  ) %>%
+  filter(missing_count > 0)
+```
+
+Missing values were checked across all variables to identify any data quality issues before modelling. This step is important because missing values can reduce the reliability of model training and evaluation if they occur in important predictors or the target variable. The dataset was examined for missing values, revealing that only the Country variable contains missing entries (302 observations, approximately 1.8%), while all other variables are complete.
+
+This indicates that the dataset is largely clean and reliable, with minimal missing data.
+
+#CHECKING FOR DUPLICATES 
+```{r}
+sum(duplicated(aqi_data))
+```
+Duplicate rows were checked to ensure data integrity. No duplicate observations were found, so no duplicate removal was required.
+
+#CROSS CHECKING FOR THE CLASS IMBALANCE 
+```{r}
+aqi_data %>%
+  count(aqi_category) %>%
+  mutate(percentage = n / sum(n) * 100)
+```
+
+The distribution of AQI categories reveals a significant class imbalance, with the majority of observations concentrated in the “Good” (46.17%) and “Moderate” (42.25%) categories. In contrast, severe pollution categories such as “Very Unhealthy” (0.78%) and “Hazardous” (0.37%) are extremely rare.
+
+
+#VARIABLE SELECTION 
+```{r}
+aqi_model <- aqi_data %>%
+  select(
+    aqi_category,
+    co_aqi_value,
+    ozone_aqi_value,
+    no2_aqi_value,
+    pm2_5_aqi_value,
+    lat,
+    lng
+  )
+```
+
+Based on the exploratory analysis, a subset of relevant variables was selected for modelling. PM2.5 was retained as the primary predictor due to its strong relationship with AQI. Other pollutants (CO, NO₂, and Ozone) were also included as they contribute additional information. Geographic variables (latitude and longitude) were kept to capture spatial variation. The target variable selected for classification is aqi_category.
+
+The selected variables include key pollutant indicators (CO, Ozone, NO₂, and PM2.5 AQI values) along with geographical features (latitude and longitude), which are expected to influence air quality levels. The inclusion of these variables is supported by exploratory analysis, which showed that PM2.5 has a strong relationship with AQI, while other pollutants provide additional contextual information. Geographic variables were included to capture potential regional variations in air quality.
+
+#HANDLING THE MISSING VALUES 
+```{r}
+aqi_model <- aqi_model %>%
+  drop_na()
+```
+
+Rows with missing values in the selected variables were removed to ensure that the dataset used for modelling contained complete information for all predictors and the target variable.
+
+#CONVERTING THE TARGET TO FACTOR
+```{r}
+aqi_model <- aqi_model %>%
+  mutate(
+    aqi_category = factor(
+      aqi_category,
+      levels = c(
+        "Good",
+        "Moderate",
+        "Unhealthy for Sensitive Groups",
+        "Unhealthy",
+        "Very Unhealthy",
+        "Hazardous"
+      )
+    )
+  )
+```
+
+The target variable aqi_category was converted into a factor so that it can be used correctly in classification models.The target variable aqi_category was converted into a factor, ensuring that it is correctly interpreted as a categorical variable in classification models. The levels were explicitly ordered to reflect the increasing severity of air pollution, which may help certain models capture ordinal relationships between categories.
+
+#FEATURE ENGNEERING 
+```{r}
+aqi_model <- aqi_model %>%
+  mutate(
+    lat_band = cut(
+      lat,
+      breaks = c(-Inf, -30, 0, 30, 60, Inf),
+      labels = c("S.Temperate", "S.Tropical",
+                 "N.Tropical", "N.Temperate", "Arctic")
+    )
+  )
+```
+
+A new feature called lat_band was created by grouping latitude into regions. This helps capture geographic patterns in air quality more effectively than using raw latitude values. A new feature, lat_band, was created by grouping latitude values into meaningful geographical regions. This transformation simplifies the continuous latitude variable into categorical zones, allowing the model to capture regional patterns in air quality more effectively. This feature engineering step enhances interpretability and may improve model performance by capturing non-linear geographic effects that raw latitude values may not fully represent.
+
+#FINAL CHECKS BEFORE MODEL BUILDING 
+```{r}
+dim(aqi_model)
+glimpse(aqi_model)
+summary(aqi_model)
+```
+
+The final dataset used for modelling consists of 16,695 observations and 8 variables, including the target variable and selected predictors. The dataset is complete, with no missing values or duplicate records, ensuring suitability for model development. The dataset was prepared for modeling through exploratory analysis, selecting relevant pollutant and geographic variables. The target variable, categorized for classification modeling, underwent feature engineering by grouping latitude into regional bands to enhance spatial pattern capture. Data quality is high, with no missing values or duplicates; however, a significant class imbalance in AQI categories could challenge model performance, especially in predicting rare pollution levels.
+
+
+*MACHINE LEARNING MODELS*
+The objective of this stage is to classify air quality into different risk categories using pollutant sub-indices and geographic features. Based on the exploratory analysis, three models were selected: Decision Tree, Naive Bayes, and Random Forest. These models were chosen because they represent different approaches to classification, allowing comparison between interpretability, probabilistic reasoning, and predictive performance.
+
+Based on the exploratory analysis, pollutant variables and geographic features were selected as predictors, while AQI category was defined as the target variable. The next step is to apply and compare different machine learning models to evaluate their performance in classifying air quality risk.
+
+#TRAIN TEST SPLIT
+```{r}
+set.seed(123)
+
+data_split <- initial_split(aqi_model, prop = 0.8, strata = aqi_category)
+
+train_data <- training(data_split)
+test_data  <- testing(data_split)
+
+dim(train_data)
+dim(test_data)
+```
+The dataset was split into training (80%) and testing (20%) sets using stratified sampling based on AQI categories. This ensures that all classes are proportionally represented in both datasets, which is important due to class imbalance.
+
+#DECISION TREE BASELINE MODEL 
+```{r}
+library(rpart)
+library(rpart.plot)
+
+set.seed(123)
+
+dt_model <- rpart(
+  aqi_category ~ co_aqi_value + ozone_aqi_value + no2_aqi_value +
+    pm2_5_aqi_value + lat + lng + lat_band,
+  data = train_data,
+  method = "class"
+)
+
+rpart.plot(dt_model)
+```
+
+#PREDICTION FOR DECISION TREE MODEL
+```{r}
+dt_pred <- predict(dt_model, test_data, type = "class")
+
+dt_accuracy <- mean(dt_pred == test_data$aqi_category)
+dt_accuracy
+```
+A Decision Tree classifier was first developed as a baseline model to predict AQI category using pollutant sub-index values and geographic variables. The predictors used were CO AQI, Ozone AQI, NO₂ AQI, PM2.5 AQI, latitude, longitude, and latitude band. A decision tree is useful at this stage because it is easy to interpret, can handle non-linear relationships, and clearly shows how the data are split into different air-quality categories.
+
+The tree shows that PM2.5 AQI value is the most important predictor, as it appears at the top of the tree and drives the main splits. This strongly supports the earlier EDA findings, where PM2.5 had the strongest relationship with overall AQI. The first major split occurs at PM2.5 AQI < 51, which mostly separates the Good category from the rest. Further splits at around 100, 150, and 201 divide the more polluted categories such as Moderate, Unhealthy for Sensitive Groups, Unhealthy, and Very Unhealthy. This indicates that the model is mainly classifying air quality based on increasing PM2.5 severity thresholds.
+
+The model achieved an accuracy of 0.9880, or about 98.8%, on the test data. This is an extremely high result, suggesting that the tree is able to classify most observations correctly. However, this performance should be interpreted with caution. The very high accuracy is likely influenced by two things: first, the target classes are heavily determined by pollutant AQI values, especially PM2.5; and second, the dataset is imbalanced, with most observations belonging to the Good and Moderate categories. As a result, accuracy alone may overstate how well the model performs on rarer but more important categories such as Very Unhealthy and Hazardous.
+
+
+#RANDOM FOREST MODEL 
+```{r}
+set.seed(123)
+
+rf_model <- randomForest(
+  aqi_category ~ co_aqi_value + ozone_aqi_value + no2_aqi_value +
+    pm2_5_aqi_value + lat + lng + lat_band,
+  data = train_data,
+  ntree = 300,
+  importance = TRUE
+)
+
+varImpPlot(rf_model)
+```
+
+#PREDICTION OF RANDOM FOREST MODEL
+```{r}
+rf_pred <- predict(rf_model, test_data)
+
+rf_accuracy <- mean(rf_pred == test_data$aqi_category)
+rf_accuracy
+```
+A Random Forest classifier was implemented to improve predictive performance by leveraging an ensemble of decision trees. The model achieved an accuracy of 99.82%, outperforming both the Decision Tree and Naive Bayes models. This high performance reflects the model’s ability to capture non-linear relationships and interactions between predictors. However, the improvement over the Decision Tree is relatively small, suggesting that the classification task is largely driven by dominant variables such as PM2.5. Additionally, while Random Forest provides strong predictive accuracy, it sacrifices interpretability compared to simpler models. Therefore, it represents a powerful but less transparent approach to AQI classification.
+
+#SUPPORT VECTOR MACHINE MODEL
+```{r}
+library(e1071)
+
+set.seed(123)
+
+svm_model <- svm(
+  aqi_category ~ co_aqi_value + ozone_aqi_value + no2_aqi_value +
+    pm2_5_aqi_value + lat + lng + lat_band,
+  data = train_data,
+  kernel = "radial"
+)
+```
+
+
+#PREDICTION OF SVM
+```{r}
+svm_pred <- predict(svm_model, test_data)
+
+svm_accuracy <- mean(svm_pred == test_data$aqi_category)
+svm_accuracy
+```
+
+Support Vector Machine (SVM) was used as a margin-based classifier to test whether AQI categories can be separated more effectively in a higher-dimensional feature space. SVM is useful when class boundaries are not purely linear and may outperform simpler models in structured classification tasks.
+
+The SVM model achieved an overall accuracy of approximately 96.55%. Its performance can then be compared with Decision Tree and Random Forest to assess whether a margin-based method provides an advantage for this air quality classification problem.
+
+#CONFUSION MATRICES
+```{r}
+table(Predicted = dt_pred, Actual = test_data$aqi_category)
+
+table(Predicted = rf_pred, Actual = test_data$aqi_category)
+
+table(Predicted = svm_pred, Actual = test_data$aqi_category)
+```
+The confusion matrices show how well each model classifies observations across AQI categories. They are particularly useful for identifying whether models perform poorly on minority categories such as Very Unhealthy and Hazardous, which is important because overall accuracy alone may hide these weaknesses. The confusion matrices provide detailed insight into model performance across AQI categories. For the Decision Tree model, most observations in the Good and Moderate categories are classified correctly. However, there are clear limitations in identifying minority classes such as Hazardous, which are not predicted at all. The Random Forest model shows a significant improvement, with correct classification across all categories, including minority classes. This demonstrates its ability to generalise better and capture complex patterns. The SVM model performs well for majority classes but shows some misclassification between Moderate and Unhealthy categories, and reduced performance for extreme AQI levels.
+
+Overall, the confusion matrices confirm that class imbalance affects model performance, particularly for simpler models.
+
+#F1-SCORE EVALUATION
+```{r}
+compute_f1 <- function(pred, actual) {
+  cm <- table(pred, actual)
+  
+  precision <- diag(cm) / rowSums(cm)
+  recall <- diag(cm) / colSums(cm)
+  
+  f1 <- 2 * (precision * recall) / (precision + recall)
+  
+  data.frame(
+    Class = names(f1),
+    F1_Score = round(f1, 3)
+  )
+}
+
+dt_f1 <- compute_f1(dt_pred, test_data$aqi_category)
+rf_f1 <- compute_f1(rf_pred, test_data$aqi_category)
+svm_f1 <- compute_f1(svm_pred, test_data$aqi_category)
+
+dt_f1
+rf_f1
+svm_f1
+```
+F1-scores were calculated for each class to provide a more balanced assessment of performance. This is especially important for imbalanced data, where models may achieve high overall accuracy but still fail to classify rare but important categories. The F1-score results highlight the impact of class imbalance on model performance. All models perform extremely well for majority classes such as Good and Moderate, with F1-scores close to 1.0. However, performance decreases for minority categories, particularly Very Unhealthy and Hazardous. The Decision Tree shows the largest drop in F1-score for these categories, while Random Forest maintains strong performance across all classes. The SVM model performs moderately well but does not match the consistency of Random Forest. This confirms that Random Forest is the most reliable model for identifying both common and extreme air quality conditions.
+
+#MODEL COMPARISON 
+```{r}
+results <- data.frame(
+  Model = c("Decision Tree", "Random Forest", "SVM"),
+  Accuracy = c(dt_accuracy, rf_accuracy, svm_accuracy)
+)
+
+results
+
+```
+The model comparison shows clear differences in predictive performance. Random Forest achieves the highest accuracy at 99.8%, followed by Decision Tree at 98.8%, and SVM at 96.6%. While all models perform well overall, Random Forest provides the best balance between accuracy and robustness across all AQI categories. Decision Tree offers strong performance but struggles with minority classes, while SVM shows slightly lower overall performance and reduced effectiveness for extreme pollution levels. These results suggest that ensemble methods are more suitable for this classification problem due to the complexity and imbalance of the dataset.
+
+#GRAPHICAL REPRESENTATION OF THE MODEL PERFORMANCE 
+```{r}
+ggplot(results, aes(x = Model, y = Accuracy * 100, fill = Model)) +
+  geom_col() +
+  geom_text(aes(label = paste0(round(Accuracy * 100, 1), "%")), vjust = -0.5) +
+  labs(
+    title = "Model Accuracy Comparison",
+    x = "Model",
+    y = "Accuracy (%)"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+The performance comparison shows which model achieves the highest predictive accuracy. This visual summary supports the evaluation of whether more advanced models such as Random Forest or SVM provide a meaningful improvement over the baseline Decision Tree.
+
+#F1-SCORE COMPARISON GRAPH
+```{r}
+library(dplyr)
+
+f1_all <- bind_rows(
+  dt_f1 %>% mutate(Model = "Decision Tree"),
+  rf_f1 %>% mutate(Model = "Random Forest"),
+  svm_f1 %>% mutate(Model = "SVM")
+)
+
+ggplot(f1_all, aes(x = Class, y = F1_Score, fill = Model)) +
+  geom_col(position = "dodge") +
+  labs(
+    title = "F1 Score Comparison by AQI Category",
+    x = "AQI Category",
+    y = "F1 Score"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+```
+The F1-score comparison provides a more detailed view of model performance across AQI categories. It helps identify whether some models perform better on minority classes, which is important for evaluating practical usefulness in air quality risk prediction.
+
+#MODELLING SUMMARY
+Overall, the modelling results show that PM2.5 remains the dominant predictor of AQI risk classification across all models. The Decision Tree provides an interpretable baseline, while Random Forest is expected to achieve stronger predictive performance by capturing more complex relationships. The SVM model offers an additional comparison using a margin-based approach. Together, these models provide a balanced evaluation of classification methods for urban air quality risk.
+
+
+
+**HIGH PERFORMANCE COMPUTATION IMPLEMENTATION ON THE MODELS**
+*WHY IT WAS UTILIZED*
+This section evaluates the use of high-performance computing (HPC) across the three classification models: Decision Tree, Random Forest, and Support Vector Machine (SVM). The aim is to assess whether parallel computation improves model training efficiency and to determine which models are most suitable for scalable machine learning workflows.
+
+#HPC APPROACH USED 
+High Performance Computing (HPC) techniques were applied to all models to evaluate their scalability and computational behaviour. While some models naturally benefit from parallelisation, others do not due to their underlying structure. This section compares how Decision Tree, SVM, and Random Forest respond to parallel computing.
+
+```{r}
+# HPC libraries
+library(parallel)
+library(doParallel)
+library(foreach)
+
+# Detect available CPU cores
+num_cores <- max(1, detectCores() - 1)
+num_cores
+
+# Split 300 trees across cores
+trees_per_core <- rep(floor(300 / num_cores), num_cores)
+trees_per_core[1] <- trees_per_core[1] + (300 - sum(trees_per_core))
+trees_per_core
+```
+
+
+#PARALLEL RANDOM FOREST IMPLEMENTATION
+```{r}
+# Sequential Random Forest
+set.seed(123)
+
+rf_time_seq <- system.time({
+  rf_seq <- randomForest(
+    aqi_category ~ co_aqi_value + ozone_aqi_value + no2_aqi_value +
+      pm2_5_aqi_value + lat + lng + lat_band,
+    data = train_data,
+    ntree = 300,
+    importance = TRUE
+  )
+})
+
+# Parallel Random Forest
+cl <- makeCluster(num_cores)
+registerDoParallel(cl)
+
+set.seed(123)
+
+rf_time_par <- system.time({
+  rf_par <- foreach(
+    ntree = trees_per_core,
+    .combine = randomForest::combine,
+    .packages = "randomForest"
+  ) %dopar% {
+    randomForest(
+      aqi_category ~ co_aqi_value + ozone_aqi_value + no2_aqi_value +
+        pm2_5_aqi_value + lat + lng + lat_band,
+      data = train_data,
+      ntree = ntree
+    )
+  }
+})
+
+stopCluster(cl)
+registerDoSEQ()
+```
+
+
+#EVALUATION OF THE RANDOM FOREST MODEL
+```{r}
+# Predictions
+rf_seq_pred <- predict(rf_seq, test_data)
+rf_par_pred <- predict(rf_par, test_data)
+
+# Accuracy
+rf_seq_accuracy <- mean(rf_seq_pred == test_data$aqi_category)
+rf_par_accuracy <- mean(rf_par_pred == test_data$aqi_category)
+
+# Results table
+rf_hpc_results <- data.frame(
+  Model = c("Random Forest (Sequential)", "Random Forest (Parallel)"),
+  Accuracy = c(rf_seq_accuracy, rf_par_accuracy),
+  Time = c(rf_time_seq["elapsed"], rf_time_par["elapsed"])
+)
+
+rf_seq_accuracy
+rf_par_accuracy
+rf_hpc_results
+```
+The high-performance computing implementation focused on the Random Forest model, as this algorithm is naturally suited to parallel execution. In a Random Forest, each decision tree can be trained independently, making it possible to distribute the workload across multiple CPU cores. To implement this, multicore parallelisation was carried out in R using the `parallel`, `doParallel`, and `foreach` packages.
+
+A comparison was made between sequential and parallel Random Forest training using the same training dataset, predictor variables, and number of trees. The sequential model required 2.319 seconds of training time, whereas the parallel implementation reduced this to 0.361 seconds. Importantly, both versions achieved the same classification accuracy of 0.9982 on the test set. This shows that parallelisation substantially improved computational efficiency without affecting predictive performance.
+
+These findings demonstrate that high-performance computing is particularly effective for ensemble methods such as Random Forest, where model components can be trained independently. This makes Random Forest the most suitable model in this study for scalable machine learning and larger air quality datasets.
+
+#COMPARISON BETWEEN SEQUENCIAL AND PARALLEL
+```{r}
+ggplot(rf_hpc_results, aes(x = Model, y = Time, fill = Model)) +
+  geom_col() +
+  geom_text(aes(label = round(Time, 2)), vjust = -0.5) +
+  labs(
+    title = "Random Forest: Sequential vs Parallel Training Time",
+    x = "Model",
+    y = "Training Time (seconds)"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+Overall, the HPC analysis shows that not all machine learning models benefit equally from parallel computing. In this study, Random Forest provided the clearest advantage because its ensemble structure allows trees to be trained independently across multiple cores. The parallel implementation achieved the same predictive accuracy as the sequential version while significantly reducing training time. This confirms that HPC is most effective when applied to models with naturally parallelisable architectures. For the present AQI classification task, Random Forest therefore offers the best balance between predictive performance and computational scalability.
+
+
+**#HPC FOR DECISION TREE MODEL**
+Decision Trees are NOT naturally parallelisable
+```{r}
+library(parallel)
+library(doParallel)
+library(foreach)
+
+num_cores <- detectCores() - 1
+
+cl <- makeCluster(num_cores)
+registerDoParallel(cl)
+
+set.seed(123)
+
+dt_time_seq <- system.time({
+  dt_model <- rpart(
+    aqi_category ~ co_aqi_value + ozone_aqi_value + no2_aqi_value +
+      pm2_5_aqi_value + lat + lng + lat_band,
+    data = train_data,
+    method = "class"
+  )
+})
+
+dt_time_par <- system.time({
+  dt_parallel_models <- foreach(i = 1:num_cores,
+                               .packages = "rpart") %dopar% {
+    rpart(
+      aqi_category ~ co_aqi_value + ozone_aqi_value + no2_aqi_value +
+        pm2_5_aqi_value + lat + lng + lat_band,
+      data = train_data,
+      method = "class"
+    )
+  }
+})
+
+stopCluster(cl)
+registerDoSEQ()
+```
+Decision Trees are not inherently suitable for parallelisation because the tree structure is built sequentially, where each split depends on previous splits. In this implementation, parallelisation was simulated by training multiple independent trees across cores. However, this does not improve a single model’s performance or training speed significantly. 
+
+
+#EVALUATION OF THE DECISON TREE MODEL
+```{r}
+dt_par_model <- dt_parallel_models[[1]]
+
+dt_par_pred <- predict(dt_par_model, test_data, type = "class")
+
+dt_par_accuracy <- mean(dt_par_pred == test_data$aqi_category)
+
+dt_par_accuracy
+```
+
+
+#COMPARISON OF SEQUENCIAL MODEL AND PARALLEL MODEL
+```{r}
+dt_hpc_results <- data.frame(
+  Model = c("Decision Tree (Sequential)", "Decision Tree (Parallel)"),
+  Accuracy = c(dt_accuracy, dt_par_accuracy),
+  Time = c(dt_time_seq["elapsed"], dt_time_par["elapsed"])
+)
+
+dt_hpc_results
+
+ggplot(dt_hpc_results, aes(x = Model, y = Time, fill = Model)) +
+  geom_col() +
+  geom_text(aes(label = round(Time, 2)), vjust = -0.5) +
+  labs(
+    title = "Decision Tree: Sequential vs Parallel Training Time",
+    y = "Time (seconds)"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+The parallel Decision Tree achieved the same predictive accuracy as the sequential version, confirming that parallelisation does not affect model output. However, the time benefit is limited because a single Decision Tree is inherently sequential and cannot be effectively divided across processors. This shows that Decision Trees are not naturally suitable for HPC. Parallel execution is possible only at the level of training multiple independent models, rather than accelerating the construction of one tree. As a result, HPC offers little practical advantage for this model.
+
+#HPC FOR SUPPORT VECTOR MACHINE
+```{r}
+cl <- makeCluster(num_cores)
+registerDoParallel(cl)
+
+set.seed(123)
+
+svm_time_seq <- system.time({
+  svm_model <- svm(
+    aqi_category ~ co_aqi_value + ozone_aqi_value + no2_aqi_value +
+      pm2_5_aqi_value + lat + lng + lat_band,
+    data = train_data,
+    kernel = "radial"
+  )
+})
+
+svm_time_par <- system.time({
+  svm_parallel_models <- foreach(i = 1:num_cores,
+                                .packages = "e1071") %dopar% {
+    svm(
+      aqi_category ~ co_aqi_value + ozone_aqi_value + no2_aqi_value +
+        pm2_5_aqi_value + lat + lng + lat_band,
+      data = train_data,
+      kernel = "radial"
+    )
+  }
+})
+
+stopCluster(cl)
+registerDoSEQ()
+```
+
+#EVALUATION OF SVM 
+```{r}
+svm_par_model <- svm_parallel_models[[1]]
+
+svm_par_pred <- predict(svm_par_model, test_data)
+
+svm_par_accuracy <- mean(svm_par_pred == test_data$aqi_category)
+
+svm_par_accuracy
+```
+
+```{r}
+svm_hpc_results <- data.frame(
+  Model = c("SVM (Sequential)", "SVM (Parallel)"),
+  Accuracy = c(svm_accuracy, svm_par_accuracy),
+  Time = c(svm_time_seq["elapsed"], svm_time_par["elapsed"])
+)
+
+svm_hpc_results
+```
+
+
+#COMPARISON TABLE AND GRAPH
+```{r}
+ggplot(svm_hpc_results, aes(x = Model, y = Time, fill = Model)) +
+  geom_col() +
+  geom_text(aes(label = round(Time, 2)), vjust = -0.5) +
+  labs(
+    title = "SVM: Sequential vs Parallel Training Time",
+    y = "Time (seconds)"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+The parallel SVM achieved the same predictive accuracy as the sequential version, but training time increased rather than decreased. In this case, the parallel implementation took 1.96 seconds compared to 1.25 seconds for the sequential model. This suggests that HPC does not provide a practical efficiency benefit for SVM on this dataset. The additional overhead of managing multiple cores outweighs the computational savings, particularly because the dataset is relatively small and SVM does not naturally decompose into fully independent sub-models like Random Forest. Therefore, SVM is not as suitable for high-performance parallel computing in this study, even though it remains a valid classification model.
+
+**FINAL HPC COMPARISON FOR THE MODELS WHERE WE USED HPC**
+The application of HPC techniques across different models highlights clear differences in their scalability. Decision Trees show minimal benefit from parallelisation due to their sequential structure. Naive Bayes also gains little from HPC because of its already efficient computation. In contrast, Random Forest demonstrates significant advantages, as its ensemble structure allows independent tree construction across multiple cores. This confirms that HPC is most effective when applied to models with parallel-friendly architectures.
+
+```{r}
+hpc_summary <- data.frame(
+  Model = c("Decision Tree", "Random Forest", "SVM"),
+  HPC_Benefit = c("Low", "High", "Low")
+)
+
+hpc_summary
+```
+The HPC comparison confirms that not all models benefit equally from parallelisation. Decision Tree shows little advantage because of its sequential structure. SVM also shows limited benefit in this study, as the parallel implementation introduced additional overhead and increased training time. In contrast, Random Forest demonstrates clear computational benefit because its trees can be trained independently across multiple cores.This indicates that parallelisation is most effective when the model structure naturally supports independent computations, as seen in Random Forest.
+
+#GRAPHICAL REPRESENTATION FOR THE MODELS 
+```{r}
+hpc_summary$HPC_Benefit <- factor(
+  hpc_summary$HPC_Benefit,
+  levels = c("Low", "High")
+)
+
+ggplot(hpc_summary, aes(x = Model, y = as.numeric(HPC_Benefit), fill = HPC_Benefit)) +
+  geom_col() +
+  scale_y_continuous(
+    breaks = c(1, 2),
+    labels = c("Low", "High")
+  ) +
+  labs(
+    title = "HPC Effectiveness Across Models",
+    x = "Model",
+    y = "HPC Benefit Level"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+The HPC comparison highlights clear differences in how machine learning models respond to parallel computation. Decision Tree shows low benefit because its structure is inherently sequential, meaning each split depends on the previous one. While parallel execution can be simulated by training multiple trees, this does not improve the efficiency of a single model.
+
+Similarly, the Support Vector Machine (SVM) model demonstrates low benefit from HPC in this study. Although parallel execution was implemented, the training time increased due to overhead associated with managing multiple cores. This indicates that SVM does not naturally scale well for parallel processing on datasets of this size.
+
+In contrast, Random Forest shows high benefit from HPC. Since each tree in the ensemble is independent, they can be trained simultaneously across multiple cores, significantly reducing training time without affecting predictive accuracy. This makes Random Forest the most scalable and computationally efficient model in this study.
+
+Overall, the findings demonstrate that HPC is most effective when applied to models with parallel-friendly architectures. Ensemble methods such as Random Forest benefit significantly, while sequential or already efficient models gain little to no advantage.
+
+**CONCLUSION FOR THE MODELS AND WORK WITH THE KEY FINDINGS**
+## CONCLUSION
+
+This study demonstrates that pollutant sub-indices can effectively classify urban air quality risk using machine learning models. PM2.5 was identified as the most influential variable, strongly driving AQI classification across all models. Among the models, Random Forest achieved the highest accuracy and provided the most consistent performance across both majority and minority categories. The Decision Tree offered interpretability but struggled with rare classes, while SVM showed slightly lower performance overall.
+
+The results also highlight the impact of class imbalance, with all models performing better on common categories than on extreme pollution levels. From a computational perspective, high-performance computing was most effective for Random Forest due to its parallel structure. In contrast, Decision Tree and SVM showed little to no benefit from parallelisation, as their architectures are not naturally suited for HPC.
+
+Overall, Random Forest provides the best balance between predictive performance and scalability, making it the most suitable model for this air quality classification task.
